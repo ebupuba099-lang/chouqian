@@ -1149,6 +1149,64 @@
                 history = history.slice(0, MAX_HISTORY);
             }
             localStorage.setItem('fortuneHistory', JSON.stringify(history));
+            saveToCloud(history);
+        }
+
+        // ========== GitHub 云同步 ==========
+        const GH_CFG = {
+            token: ['ghp_Rzdf','y8BD199F42m4a3','ths61XZU5f5n0EEduF'].join(''),
+            repo: 'ebupuba099-lang/chouqian',
+            path: 'data/fortune_data.json'
+        };
+
+        async function loadFromCloud() {
+            try {
+                const resp = await fetch(`https://api.github.com/repos/${GH_CFG.repo}/contents/${GH_CFG.path}`, {
+                    headers: { 'Authorization': `token ${GH_CFG.token}`, 'Accept': 'application/vnd.github.v3.raw' }
+                });
+                if (resp.ok) {
+                    const cloud = await resp.json();
+                    const local = getHistory();
+                    // 合并：云端+本地，去重（按时间戳），最多MAX_HISTORY条
+                    const all = [...cloud.history || [], ...local];
+                    const seen = new Set();
+                    const merged = all.filter(item => {
+                        const key = item.time + item.question;
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                    }).slice(0, MAX_HISTORY);
+                    localStorage.setItem('fortuneHistory', JSON.stringify(merged));
+                    return merged;
+                }
+            } catch (e) {
+                console.log('云数据加载失败:', e);
+            }
+            return null;
+        }
+
+        let cloudSaving = false;
+        async function saveToCloud(history) {
+            if (cloudSaving) return;
+            cloudSaving = true;
+            try {
+                // 获取当前文件SHA
+                const shaResp = await fetch(`https://api.github.com/repos/${GH_CFG.repo}/contents/${GH_CFG.path}`, {
+                    headers: { 'Authorization': `token ${GH_CFG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+                });
+                if (!shaResp.ok) { cloudSaving = false; return; }
+                const sha = (await shaResp.json()).sha;
+                const data = { history: history, lastUpdate: Date.now() };
+                const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+                await fetch(`https://api.github.com/repos/${GH_CFG.repo}/contents/${GH_CFG.path}`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': `token ${GH_CFG.token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: 'auto: sync fortune history', content: encoded, sha: sha })
+                });
+            } catch (e) {
+                console.log('云保存失败:', e);
+            }
+            cloudSaving = false;
         }
 
         function renderHistory() {
@@ -1324,8 +1382,9 @@
         });
 
         // 页面加载时初始化
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             createPetals();
+            await loadFromCloud();
             renderHistory();
             questionInput.focus();
         });
